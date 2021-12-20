@@ -14,7 +14,8 @@ from machine import ADC, Pin, Timer
 class Multiplexer:
     def __init__(self, pin1, pin2, pin3, pin4, a_readable: ADC, a_channels, enable: Pin):
         """
-        Represents an 16 Channel Analogue Multiplexer, with 4 digital pins to select the analogue channel to be read.
+        Represents the CD74HCT4067 16 Channel Analogue Multiplexer, with 4 digital pins to select the analogue channel
+        to be read.
 
         :param pin1: First digital Pin, should not be null.
         :param pin2: Second digital Pin, can be null.
@@ -96,6 +97,10 @@ class Multiplexer:
 
 class ADCIter:
     def __init__(self, *multiplexer: Multiplexer):
+        """
+        Object for iterating over multiple Multiplexer-Objects
+        :param multiplexer:
+        """
         self.multiplexer = multiplexer
         self.a_ch = []
         for i in self.multiplexer:
@@ -154,7 +159,7 @@ def connect_to_wifi(ssid="", pw=""):
 def convert_retrieved_data(data_to_conv: list):
     res = []
     for i in range(22):
-        res.append((data_to_conv[i] - zero_pos[0]) * factor_pos[i])
+        res.append((data_to_conv[i] - zero_pos[i]) * factor_pos[i])
     return res
 
 
@@ -164,20 +169,20 @@ def retrieve_data():
     data.append(convert_retrieved_data(adc_iter.retrieve_data_raw()))
     iteration_done = True
 
-    if len(data) > 60:
+    if len(data) > 10:
         data = []
 
 
 async def publish_data():
     global data_busy, data
     while not iteration_done or len(data) < 2:
-        await uasyncio.sleep(0.005)
+        await uasyncio.sleep(0.001)
     temp = data
     data = []
     try:
-        ws.send(str([token, temp]))
+        await ws.send(str([token, temp]))
     except:
-        connect_websocket()
+        await connect_websocket_async()
 
 
 async def main_async():
@@ -197,6 +202,11 @@ def connect_websocket():
     ws = uwebsockets.client.connect('ws://10.117.170.219:8080')
 
 
+async def connect_websocket_async():
+    global ws
+    ws = await uwebsockets.client.connect('ws://10.117.170.219:8080')
+
+
 def calibrate():
     global zero_pos, end_pos
     print("[ESP32]: Calibration starts...")
@@ -208,8 +218,6 @@ def calibrate():
     for i in range(len(zero_pos)):
         factor_pos.append(90 / (end_pos[i] - zero_pos[i] + 1))
 
-    print(str(zero_pos))
-    print(str(end_pos))
     print("[ESP32]: Calibration done.")
 
 
@@ -256,3 +264,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -1,8 +1,10 @@
+import time
 import network
 import uwebsockets.client
 import urequests
 import _thread
 import ujson
+import os
 
 try:
     import asyncio as uasyncio
@@ -97,10 +99,6 @@ class Multiplexer:
 
 class ADCIter:
     def __init__(self, *multiplexer: Multiplexer):
-        """
-        Object for iterating over multiple Multiplexer-Objects
-        :param multiplexer:
-        """
         self.multiplexer = multiplexer
         self.a_ch = []
         for i in self.multiplexer:
@@ -120,9 +118,6 @@ data = []
 # vector, storing zero position
 zero_pos = []
 # vector, storing end position
-end_pos = []
-factor_pos = []
-# data-retrieve iteration done?
 iteration_done = False
 # data busy?
 data_busy = False
@@ -130,25 +125,31 @@ token = ""
 ssid = ""
 password = ""
 ws = None
+# mechanical degree of freedom
+mdof = 340
+# factor for data conversion
+f_rc = mdof / 4095
 # multiplexer 1
 multi1 = Multiplexer(Pin(25, Pin.OUT), Pin(33, Pin.OUT), Pin(32, Pin.OUT), Pin(12, Pin.OUT), ADC(Pin(34)), 16,
                      Pin(26, Pin.OUT))
 # multiplexer 2
 multi2 = Multiplexer(Pin(23, Pin.OUT), Pin(22, Pin.OUT), Pin(21, Pin.OUT), None, ADC(Pin(35)), 6, Pin(5, Pin.OUT))
 # ADCIter obj
-adc_iter = ADCIter(multi1, multi2)
+adc_iter = ADCIter(multi1 , multi2)
 
 
 def connect_to_wifi(ssid="", pw=""):
-    print("[ESP32]: Connecting to WIFI with SSID: " + ssid)
     sta_if = network.WLAN(network.STA_IF)
     sta_if.active(True)
 
     sta_if.connect(ssid, pw)
 
-    print("[ESP32]: Waiting for connection to be established...")
+    counter = 0
     while not sta_if.isconnected():
-        pass
+        if counter > 5:
+            break
+        counter += 1
+        time.sleep_ms(1000)
 
     if not sta_if.isconnected():
         raise Exception("Could not connect to WIFI!")
@@ -157,10 +158,9 @@ def connect_to_wifi(ssid="", pw=""):
 
 
 def convert_retrieved_data(data_to_conv: list):
-    res = []
     for i in range(22):
-        res.append((data_to_conv[i] - zero_pos[i]) * factor_pos[i])
-    return res
+        data_to_conv[i] = data_to_conv[i] * f_rc - zero_pos[i]
+    return data_to_conv
 
 
 def retrieve_data():
@@ -175,14 +175,14 @@ def retrieve_data():
 
 async def publish_data():
     global data_busy, data
-    while not iteration_done or len(data) < 2:
+    while not iteration_done or len(data) < 3:
         await uasyncio.sleep(0.001)
     temp = data
     data = []
     try:
-        await ws.send(str([token, temp]))
+        ws.send(str([token, temp]))
     except:
-        await connect_websocket_async()
+        connect_websocket()
 
 
 async def main_async():
@@ -190,33 +190,38 @@ async def main_async():
         await publish_data()
 
 
-def uart_input_reader():
+async def uart_input_reader():
     while True:
-        cmd = input()  # SE SHIT WORKS
+        cmd = input()
         # TODO: interpret command
         print(cmd)
 
 
+def uart_data_thread_main():
+    event_loop = uasyncio.get_event_loop()
+    event_loop.create_task(main_async())
+    # event_loop.create_task(uart_input_reader())
+    event_loop.run_forever()
+
+
 def connect_websocket():
     global ws
-    ws = uwebsockets.client.connect('ws://10.117.170.219:8080')
-
-
-async def connect_websocket_async():
-    global ws
-    ws = await uwebsockets.client.connect('ws://10.117.170.219:8080')
+    print("[ESP32]: Connecting to Websocket Server...")
+    try:
+        ws = uwebsockets.client.connect('wss://emulator.binobo.io')  #
+        print("[ESP32]: Connections successfully established!")
+    except:
+        print("[ESP32]: Couldn't connect to Websocket!")
 
 
 def calibrate():
-    global zero_pos, end_pos
+    global zero_pos
     print("[ESP32]: Calibration starts...")
-    input("[ESP32]: Zero Position --> Waiting for verification...")
+    input("[ESP32]: Zero Position --> Waiting for verification...\n")
     zero_pos = adc_iter.retrieve_data_raw()
-    input("[ESP32]: End Position --> Waiting for verification...")
-    end_pos = adc_iter.retrieve_data_raw()
 
     for i in range(len(zero_pos)):
-        factor_pos.append(90 / (end_pos[i] - zero_pos[i] + 1))
+        zero_pos[i] = zero_pos[i] * f_rc
 
     print("[ESP32]: Calibration done.")
 
@@ -224,44 +229,70 @@ def calibrate():
 def main():
     global token, ssid, password, ws
 
+    input("Hit <enter> to start configuration...\n")
+
     print("[ESP32]: Configuration starts...")
 
+    is_storage = "config.txt" in os.listdir()
+    use_storage = False
+
+    if is_storage:
+        with open("config.txt", "r") as config:
+            lines = config.readlines()
+            ssid = lines[0][:-1]
+            password = lines[1][:-1]
+            token = lines[2][:-1]
+            print("[1]" + ssid, "[2]" + password, "[3]" + token, sep="\n")
+        x = input("Use local stored config data? [y/n]:\n")
+        use_storage = x is "y"
+
     connected = False
+    is_connection_error = False
     while not connected:
-        ssid = input("SSID:")
-        password = input("Password:")
+        if not use_storage or is_connection_error:
+            ssid = input("SSID:\n")
+            password = input("Password:\n")
         try:
             connect_to_wifi(ssid, password)
             print("[ESP32]: Connection successfully established!")
             connected = True
         except:
-            print("[ESP32]: Error occurred while connecting, please try again.")
+            is_connection_error = True
+            input("[ESP32]: Error occurred while connecting, please try again.")
 
     token_valid = False
+    is_stored_token_valid = True
     while not token_valid:
-        token = input("Token:\n")
+        if not use_storage or not is_stored_token_valid:
+            token = input("Token:\n")
         print("[ESP32]: Validating token...")
-        res = urequests.get(url="http://10.117.170.219:1443/roboData/rest_api/validate_token?token=" + token)
+        res = urequests.get(url="https://binobo.io/roboData/rest_api/validate_token?token=" + str(token))
         try:
             if ujson.loads(res.text)['status'] == "SUCCESS":
                 token_valid = True
-                print("[ESP32]: Token valid.")
+                input("[ESP32]: Token valid.")
             else:
-                print("[ESP32]: Token not valid, try again.")
+                is_stored_token_valid = False
+                input("[ESP32]: Token not valid, try again.")
         except KeyError or IndexError:
             pass
 
     calibrate()
     connect_websocket()
 
+    if not use_storage:
+        store_data = input("Store configuration data? [y/n]:\n") == "y"
+        if store_data:
+            with open("config.txt", "w") as config:
+                config.write(ssid + "\n" + password + "\n" + token + "\n")
+                print("[ESP32]: Config-Data stored!")
+
+    print("[ESP32]: Configuration done! Have fun!")
+
     timer = Timer(0)
     timer.init(period=33, mode=Timer.PERIODIC, callback=lambda t: retrieve_data())
-    event_loop = uasyncio.get_event_loop()
-    event_loop.create_task(main_async())
-    _thread.start_new_thread(uart_input_reader, ())
-    event_loop.run_forever()
+    _thread.start_new_thread(uart_data_thread_main, ())
 
 
 if __name__ == "__main__":
     main()
-

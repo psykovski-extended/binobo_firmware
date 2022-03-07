@@ -260,22 +260,25 @@ def main():
             is_connection_error = True
             input("[ESP32]: Error occurred while connecting, please try again.")
 
-    token_valid = False
-    is_stored_token_valid = True
-    while not token_valid:
-        if not use_storage or not is_stored_token_valid:
-            token = input("Token:\n")
-        print("[ESP32]: Validating token...")
-        res = urequests.get(url="https://binobo.io/roboData/rest_api/validate_token?token=" + str(token))
-        try:
-            if ujson.loads(res.text)['status'] == "SUCCESS":
-                token_valid = True
-                input("[ESP32]: Token valid.")
-            else:
-                is_stored_token_valid = False
-                input("[ESP32]: Token not valid, try again.")
-        except KeyError or IndexError:
-            pass
+    # token_valid = False
+    # is_stored_token_valid = True
+    # while not token_valid:
+    #     if not use_storage or not is_stored_token_valid:
+    #         token = input("Token:\n")
+    #     print("[ESP32]: Validating token...")
+    #     res = urequests.get(url="https://www.binobo.io/roboData/rest_api/validate_token?token=" + str(token))
+    #     try:
+    #         if ujson.loads(res.text)['status'] == "SUCCESS":
+    #             token_valid = True
+    #             input("[ESP32]: Token valid.")
+    #         else:
+    #             is_stored_token_valid = False
+    #             input("[ESP32]: Token not valid, try again.")
+    #     except KeyError or IndexError:
+    #         pass
+
+    if not use_storage:
+        token = input("Token:\n")
 
     calibrate()
     connect_websocket()

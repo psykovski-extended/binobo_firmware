@@ -99,12 +99,22 @@ class Multiplexer:
 
 class ADCIter:
     def __init__(self, *multiplexer: Multiplexer):
+        """
+        Creates a kind-of Iterator, where the objects itself is iterating over the parsed multiplexers, so there is no
+        need to iterate over it with calling iter(obj)
+        :param multiplexer: Multiplexer-Objects to iterate over
+        """
         self.multiplexer = multiplexer
         self.a_ch = []
         for i in self.multiplexer:
             self.a_ch.append(i.a_channels)
 
     def retrieve_data_raw(self):
+        """
+        Reads all analogue channels and converts the result to a 1D-List, where the items are ordered by the order the
+        of the parsed multiplexer and chronologically by the number of the pins on the multiplexer board
+        :return: 1D-List of the retrieved analogue values
+        """
         res = []
         for multi in self.multiplexer:
             for i in multi.read_all():
@@ -117,13 +127,15 @@ class ADCIter:
 data = []
 # vector, storing zero position
 zero_pos = []
-# vector, storing end position
+# indicates that the iteration for data-retrieving is done or still ongoing
 iteration_done = False
-# data busy?
-data_busy = False
+# token to identify the connected user
 token = ""
+# wifi-ssid
 ssid = ""
+# wifi-password
 password = ""
+# websocket client object
 ws = None
 # mechanical degree of freedom
 mdof = 340
@@ -135,21 +147,24 @@ multi1 = Multiplexer(Pin(25, Pin.OUT), Pin(33, Pin.OUT), Pin(32, Pin.OUT), Pin(1
 # multiplexer 2
 multi2 = Multiplexer(Pin(23, Pin.OUT), Pin(22, Pin.OUT), Pin(21, Pin.OUT), None, ADC(Pin(35)), 6, Pin(5, Pin.OUT))
 # ADCIter obj
-adc_iter = ADCIter(multi1 , multi2)
+adc_iter = ADCIter(multi1, multi2)
 
 
 def connect_to_wifi(ssid="", pw=""):
+    """
+    Tries to establish a connection to a wifi
+    :param ssid: SSID of the wifi to connect to
+    :param pw: Password of the wifi to connect to
+    :return: returns the wrapper object of the connection
+    """
     sta_if = network.WLAN(network.STA_IF)
     sta_if.active(True)
 
     sta_if.connect(ssid, pw)
+    sta_if.config(reconnects=2)
 
-    counter = 0
     while not sta_if.isconnected():
-        if counter > 5:
-            break
-        counter += 1
-        time.sleep_ms(1000)
+        pass
 
     if not sta_if.isconnected():
         raise Exception("Could not connect to WIFI!")
@@ -158,12 +173,20 @@ def connect_to_wifi(ssid="", pw=""):
 
 
 def convert_retrieved_data(data_to_conv: list):
+    """
+    converts the retrieved data from an analogue value to degrees
+    :param data_to_conv: Data to be converted
+    :return:
+    """
     for i in range(22):
         data_to_conv[i] = data_to_conv[i] * f_rc - zero_pos[i]
     return data_to_conv
 
 
 def retrieve_data():
+    """
+    retrieves data from all connected multiplexer boards and appends it to the data-buffer
+    """
     global iteration_done, data
     iteration_done = False
     data.append(convert_retrieved_data(adc_iter.retrieve_data_raw()))
@@ -174,7 +197,10 @@ def retrieve_data():
 
 
 async def publish_data():
-    global data_busy, data
+    """
+    Sends the buffered data to the websocket server over a websocket-connection
+    """
+    global data
     while not iteration_done or len(data) < 3:
         await uasyncio.sleep(0.001)
     temp = data
@@ -185,12 +211,18 @@ async def publish_data():
         connect_websocket()
 
 
-async def main_async():
+async def async_data_publishing():
+    """
+    Endlessly publishes data over the websocket connection
+    """
     while True:
         await publish_data()
 
 
 async def uart_input_reader():
+    """
+    Reads commands retrieved over UART0 --> not fully implemented yet!
+    """
     while True:
         cmd = input()
         # TODO: interpret command
@@ -198,23 +230,34 @@ async def uart_input_reader():
 
 
 def uart_data_thread_main():
+    """
+    Thread-routine, publishes data on separate thread to avoid blocking of data retrieving
+    This routine should als read uart-data to interpret commands received while runtime, but this feature is not implemented yet
+    """
     event_loop = uasyncio.get_event_loop()
-    event_loop.create_task(main_async())
+    event_loop.create_task(async_data_publishing())
     # event_loop.create_task(uart_input_reader())
     event_loop.run_forever()
 
 
 def connect_websocket():
+    """
+    Tries to connect to 'ws://emuesp32.binobo.io' to establish a websocket connection
+    """
     global ws
     print("[ESP32]: Connecting to Websocket Server...")
     try:
-        ws = uwebsockets.client.connect('wss://emulator.binobo.io')  #
+        ws = uwebsockets.client.connect('ws://emuesp32.binobo.io')  #
         print("[ESP32]: Connections successfully established!")
     except:
         print("[ESP32]: Couldn't connect to Websocket!")
 
 
 def calibrate():
+    """
+    Reads all channels to determine where the zero-position of the potentiometers are, needed to measure the positions
+    of the fingers
+    """
     global zero_pos
     print("[ESP32]: Calibration starts...")
     input("[ESP32]: Zero Position --> Waiting for verification...\n")
